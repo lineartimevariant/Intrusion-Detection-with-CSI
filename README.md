@@ -163,27 +163,6 @@ csi_intrusion_pipeline/
 
 ---
 
-# Applications
-
-- Smart home intrusion detection
-- Device-free indoor monitoring
-- Human activity sensing
-- Edge AI sensing systems
-- WiFi-based occupancy detection
-- Low-cost wireless surveillance
-- Ambient intelligence systems
-
----
-
-# Future Improvements
-
-- Transformer-based CSI models
-- Multi-ESP32 sensing fusion
-- TinyML deployment
-- Federated CSI learning
-- CSI denoising and calibration
-- Cross-environment adaptation
-- Semantic wireless sensing
 
 ---
 
