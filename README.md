@@ -187,7 +187,4 @@ csi_intrusion_pipeline/
 
 ---
 
-# Author
 
-Rajshekhar Bhatta  
-PhD Researcher — Wireless Sensing, Edge AI, and B5G/6G Systems
