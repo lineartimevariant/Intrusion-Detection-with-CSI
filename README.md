@@ -102,7 +102,6 @@ The live dashboard provides:
 
 - ESP32-E
 - WiFi Router / Access Point
-- NVIDIA GPU-enabled Laptop
 
 ## Software
 
@@ -128,7 +127,7 @@ The live dashboard provides:
 | TensorFlow | GPU Enabled |
 | ESP-IDF | v4.4.4 |
 | CUDA | Enabled |
-| GPU | NVIDIA RTX Series |
+
 
 ---
 
