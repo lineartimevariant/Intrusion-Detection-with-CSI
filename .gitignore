@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual Environments
+csi_env/
+venv/
+env/
+
+# TensorFlow models
+*.h5
+*.keras
+
+# NumPy data
+*.npy
+
+# Logs
+logs/
+
+# VSCode
+.vscode/
+
+# Serial captures
+*.log
+
+# Linux
+*.swp
+.DS_Store
+
+# Large datasets
+data/raw/*.csv
+data/external/

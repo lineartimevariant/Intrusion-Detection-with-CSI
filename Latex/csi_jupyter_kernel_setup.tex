@@ -1,0 +1,443 @@
+
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage[T1]{fontenc}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{CSI Intrusion Detection Project}
+\lhead{Environment and Kernel Setup}
+\cfoot{\thepage}
+
+\title{\textbf{CSI Intrusion Detection Project\\
+Complete Environment, Package, and Jupyter Kernel Setup Guide}}
+\author{Rajshekhar Bhatta}
+\date{\today}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    columns=fullflexible
+}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Project Overview}
+
+This document explains the complete environment setup procedure for the ESP32 CSI Intrusion Detection project.
+
+The project uses:
+
+\begin{itemize}
+    \item ESP32 CSI passive sensing
+    \item Python-based CSI parsing
+    \item CNN+LSTM deep learning model
+    \item TensorFlow GPU acceleration
+    \item Jupyter Notebook development workflow
+    \item Real-time CSI inference dashboard
+\end{itemize}
+
+\section{Project Architecture}
+
+\begin{verbatim}
+ESP32-E Passive Sniffer
+        ↓
+Serial CSI Stream
+        ↓
+Python CSI Parser
+        ↓
+Amplitude + Phase Feature Extraction
+        ↓
+Sliding Window Creation
+        ↓
+CNN + LSTM Deep Learning Model
+        ↓
+Real-Time Intrusion Prediction
+\end{verbatim}
+
+\section{Linux / Ubuntu Environment Setup}
+
+\subsection{Step 1: Create Project Directory}
+
+\begin{lstlisting}[language=bash]
+mkdir -p ~/esp_projects
+cd ~/esp_projects
+\end{lstlisting}
+
+\subsection{Step 2: Create Python Virtual Environment}
+
+\begin{lstlisting}[language=bash]
+python3.10 -m venv ~/esp_projects/csi_realtime_ml/csi_env
+\end{lstlisting}
+
+\subsection{Step 3: Activate the Environment}
+
+\begin{lstlisting}[language=bash]
+source ~/esp_projects/csi_realtime_ml/csi_env/bin/activate
+\end{lstlisting}
+
+After activation, the terminal should show:
+
+\begin{verbatim}
+(csi_env)
+\end{verbatim}
+
+\subsection{Step 4: Upgrade pip}
+
+\begin{lstlisting}[language=bash]
+python -m pip install --upgrade pip
+\end{lstlisting}
+
+\subsection{Step 5: Install Required Packages}
+
+\subsubsection{Core Scientific Packages}
+
+\begin{lstlisting}[language=bash]
+pip install numpy pandas scipy matplotlib seaborn
+\end{lstlisting}
+
+\subsubsection{Machine Learning Packages}
+
+\begin{lstlisting}[language=bash]
+pip install scikit-learn tensorflow keras
+\end{lstlisting}
+
+\subsubsection{Serial Communication Packages}
+
+\begin{lstlisting}[language=bash]
+pip install pyserial
+\end{lstlisting}
+
+\subsubsection{Notebook and Kernel Packages}
+
+\begin{lstlisting}[language=bash]
+pip install notebook jupyterlab ipykernel
+\end{lstlisting}
+
+\subsubsection{Visualization Packages}
+
+\begin{lstlisting}[language=bash]
+pip install plotly
+\end{lstlisting}
+
+\subsubsection{Install All Packages Together}
+
+\begin{lstlisting}[language=bash]
+pip install \
+numpy \
+pandas \
+scipy \
+matplotlib \
+seaborn \
+scikit-learn \
+tensorflow \
+keras \
+pyserial \
+notebook \
+jupyterlab \
+ipykernel \
+plotly
+\end{lstlisting}
+
+\section{Windows Environment Setup}
+
+\subsection{Step 1: Create Environment}
+
+\begin{lstlisting}[language=bash]
+python -m venv csi_env
+\end{lstlisting}
+
+\subsection{Step 2: Activate Environment}
+
+\begin{lstlisting}[language=bash]
+.\csi_env\Scripts\activate
+\end{lstlisting}
+
+\subsection{Step 3: Install Packages}
+
+\begin{lstlisting}[language=bash]
+pip install numpy pandas scipy matplotlib seaborn
+pip install scikit-learn tensorflow keras
+pip install pyserial notebook jupyterlab ipykernel
+pip install plotly
+\end{lstlisting}
+
+\subsection{Step 4: Register Jupyter Kernel}
+
+\begin{lstlisting}[language=bash]
+python -m ipykernel install \
+--user \
+--name csi_env \
+--display-name "Python (csi_env)"
+\end{lstlisting}
+
+\section{Registering the Jupyter Kernel}
+
+\subsection{Linux Kernel Registration}
+
+\begin{lstlisting}[language=bash]
+source ~/esp_projects/csi_realtime_ml/csi_env/bin/activate
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash]
+python -m ipykernel install \
+--user \
+--name csi_env \
+--display-name "Python (csi_env)"
+\end{lstlisting}
+
+\subsection{Verify Kernel Installation}
+
+\begin{lstlisting}[language=bash]
+jupyter kernelspec list
+\end{lstlisting}
+
+Expected output:
+
+\begin{verbatim}
+csi_env
+\end{verbatim}
+
+\section{Opening the Project in VS Code}
+
+\subsection{Open VS Code}
+
+\begin{lstlisting}[language=bash]
+cd ~/esp_projects/csi_intrusion_pipeline
+code .
+\end{lstlisting}
+
+\subsection{Open Notebook}
+
+Open:
+
+\begin{verbatim}
+Notebook/Train and test.ipynb
+\end{verbatim}
+
+\subsection{Select Kernel}
+
+Inside the notebook:
+
+\begin{verbatim}
+Top Right -> Select Kernel
+\end{verbatim}
+
+Choose:
+
+\begin{verbatim}
+Python (csi_env)
+\end{verbatim}
+
+\subsection{If Kernel Does Not Appear}
+
+Reload VS Code:
+
+\begin{verbatim}
+Ctrl + Shift + P
+Developer: Reload Window
+\end{verbatim}
+
+Then select:
+
+\begin{verbatim}
+Python (csi_env)
+\end{verbatim}
+
+\section{Testing the Environment}
+
+Run the following notebook cell:
+
+\begin{lstlisting}[language=Python]
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import sklearn
+import serial
+import tensorflow as tf
+
+print("NumPy:", np.__version__)
+print("TensorFlow:", tf.__version__)
+print("GPU:", tf.config.list_physical_devices("GPU"))
+\end{lstlisting}
+
+Expected output:
+
+\begin{verbatim}
+GPU: [PhysicalDevice(name='/physical_device:GPU:0',
+device_type='GPU')]
+\end{verbatim}
+
+\section{TensorFlow GPU Verification}
+
+\subsection{Check NVIDIA GPU}
+
+\begin{lstlisting}[language=bash]
+nvidia-smi
+\end{lstlisting}
+
+\subsection{Check TensorFlow GPU Access}
+
+\begin{lstlisting}[language=bash]
+python -c "import tensorflow as tf; \
+print(tf.config.list_physical_devices('GPU'))"
+\end{lstlisting}
+
+\section{Package Summary}
+
+\begin{longtable}{|p{5cm}|p{8cm}|}
+\hline
+\textbf{Package} & \textbf{Purpose} \\
+\hline
+numpy & Numerical computation and array processing \\
+\hline
+pandas & CSV and dataframe handling \\
+\hline
+scipy & Signal processing utilities \\
+\hline
+matplotlib & Visualization and live plotting \\
+\hline
+seaborn & Advanced statistical visualization \\
+\hline
+scikit-learn & Machine learning preprocessing and evaluation \\
+\hline
+tensorflow & Deep learning framework \\
+\hline
+keras & CNN+LSTM model API \\
+\hline
+pyserial & ESP32 serial communication \\
+\hline
+notebook & Jupyter notebook support \\
+\hline
+jupyterlab & Interactive notebook interface \\
+\hline
+ipykernel & Jupyter kernel registration \\
+\hline
+plotly & Interactive visualization support \\
+\hline
+\end{longtable}
+
+\section{Running the Notebook}
+
+\subsection{Launch Jupyter Notebook}
+
+\begin{lstlisting}[language=bash]
+jupyter notebook
+\end{lstlisting}
+
+or
+
+\begin{lstlisting}[language=bash]
+jupyter lab
+\end{lstlisting}
+
+\section{Real-Time CSI Dashboard Execution}
+
+\subsection{Activate Environment}
+
+\begin{lstlisting}[language=bash]
+source ~/esp_projects/csi_realtime_ml/csi_env/bin/activate
+\end{lstlisting}
+
+\subsection{Run Live Dashboard}
+
+\begin{lstlisting}[language=bash]
+cd ~/esp_projects/csi_intrusion_pipeline/realtime
+
+python live_dashboard.py
+\end{lstlisting}
+
+\section{Common Problems and Fixes}
+
+\subsection{Problem: No module named numpy}
+
+This means the notebook is not using the correct kernel.
+
+Fix:
+
+\begin{verbatim}
+Top Right -> Select Python (csi_env)
+\end{verbatim}
+
+\subsection{Problem: Python (csi\_env) does not appear}
+
+Run:
+
+\begin{lstlisting}[language=bash]
+source ~/esp_projects/csi_realtime_ml/csi_env/bin/activate
+
+python -m ipykernel install \
+--user \
+--name csi_env \
+--display-name "Python (csi_env)"
+\end{lstlisting}
+
+Then reload VS Code.
+
+\subsection{Problem: No module named serial}
+
+Install pyserial:
+
+\begin{lstlisting}[language=bash]
+pip install pyserial
+\end{lstlisting}
+
+\subsection{Problem: TensorFlow GPU not detected}
+
+Check GPU:
+
+\begin{lstlisting}[language=bash]
+nvidia-smi
+\end{lstlisting}
+
+Then check TensorFlow:
+
+\begin{lstlisting}[language=bash]
+python -c "import tensorflow as tf; \
+print(tf.config.list_physical_devices('GPU'))"
+\end{lstlisting}
+
+\section{Final Recommended Kernel}
+
+Always use:
+
+\begin{verbatim}
+Python (csi_env)
+\end{verbatim}
+
+for:
+
+\begin{itemize}
+    \item CSI parsing
+    \item Feature extraction
+    \item CNN+LSTM model training
+    \item Model testing
+    \item Real-time CSI inference dashboard
+\end{itemize}
+
+\end{document}
