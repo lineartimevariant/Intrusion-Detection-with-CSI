@@ -67,17 +67,30 @@ class SegmentationContext:
         self.turbulence_buffer = [0.0] * window_size
         self.buffer_index = 0
         self.buffer_count = 0
-        
+
         # State machine
         self.state = self.STATE_IDLE
         self.packet_index = 0
-        
+
         # Current metrics
         self.current_moving_variance = 0.0
         self.last_turbulence = 0.0
-        
-        # Last amplitudes (stored for external use)
-        self.last_amplitudes = None
+
+        # Pre-allocated amplitude scratch (BAND_SIZE = 12). Reused on every
+        # packet so the per-packet hot path allocates nothing for the
+        # spatial-turbulence calc. last_amplitudes always points here.
+        self._amp_scratch = [0.0] * 12
+        self.last_amplitudes = self._amp_scratch
+        self._amp_count = 0
+
+        # Reusable metrics dict — mutated in place per get_metrics() so
+        # publish never allocates a fresh dict.
+        self._metrics = {
+            'moving_variance': 0.0,
+            'threshold': self.threshold,
+            'turbulence': 0.0,
+            'state': self.state,
+        }
         
         # Initialize low-pass filter if enabled
         self.lowpass_filter = None
@@ -194,43 +207,92 @@ class SegmentationContext:
     
     def calculate_spatial_turbulence(self, csi_data, selected_subcarriers=None, return_amplitudes=False):
         """
-        Calculate spatial turbulence and store amplitudes for features
-        
-        Uses the instance's use_cv_normalization setting to determine
-        whether to apply CV normalization (std/mean) or raw std.
-        
-        Args:
-            csi_data: array of int8 I/Q values (alternating real, imag)
-            selected_subcarriers: list of subcarrier indices to use (default: all up to 64)
-            return_amplitudes: if True, return (turbulence, amplitudes) tuple
-            
-        Returns:
-            float: Turbulence value (CV-normalized or raw std depending on config)
-            OR tuple (turbulence, amplitudes) if return_amplitudes=True
-        
-        Note: Stores last amplitudes for feature calculation at publish time.
+        Calculate spatial turbulence using the pre-allocated amplitude scratch.
+
+        Mirrors the static compute_spatial_turbulence() logic but writes
+        amplitudes in-place into self._amp_scratch — no per-packet list
+        allocation. Grows the scratch buffer once if a longer subcarrier
+        selection is configured.
+
+        Returns turbulence, or (turbulence, amp_scratch) if requested.
+        Note: the returned amplitude list is a reference to the scratch
+        buffer; callers must read it before the next packet arrives.
         """
-        turbulence, amplitudes = self.compute_spatial_turbulence(
-            csi_data, selected_subcarriers, self.use_cv_normalization
-        )
-        self.last_amplitudes = amplitudes
+        if len(csi_data) < 2:
+            self._amp_count = 0
+            if return_amplitudes:
+                return 0.0, self._amp_scratch
+            return 0.0
+
+        amps = self._amp_scratch
+
+        if selected_subcarriers is None:
+            # Fallback path (rarely used at runtime — boot only).
+            max_values = min(128, len(csi_data))
+            needed = max_values // 2
+            if len(amps) < needed:
+                amps = [0.0] * needed
+                self._amp_scratch = amps
+                self.last_amplitudes = amps
+            count = 0
+            for i in range(0, max_values, 2):
+                if i + 1 < max_values:
+                    imag = float(to_signed_int8(csi_data[i]))
+                    real = float(to_signed_int8(csi_data[i + 1]))
+                    amps[count] = math.sqrt(real * real + imag * imag)
+                    count += 1
+        else:
+            n_sc = len(selected_subcarriers)
+            if len(amps) < n_sc:
+                amps = [0.0] * n_sc
+                self._amp_scratch = amps
+                self.last_amplitudes = amps
+            count = 0
+            n_csi = len(csi_data)
+            for sc_idx in selected_subcarriers:
+                i = sc_idx * 2
+                if i + 1 < n_csi:
+                    imag = float(to_signed_int8(csi_data[i]))
+                    real = float(to_signed_int8(csi_data[i + 1]))
+                    amps[count] = math.sqrt(real * real + imag * imag)
+                    count += 1
+
+        self._amp_count = count
+        if count < 2:
+            if return_amplitudes:
+                return 0.0, amps
+            return 0.0
+
+        # Two-pass variance over the populated slice of the scratch.
+        s = 0.0
+        for k in range(count):
+            s += amps[k]
+        mean = s / count
+        var = 0.0
+        for k in range(count):
+            d = amps[k] - mean
+            var += d * d
+        var /= count
+
+        if self.use_cv_normalization:
+            turbulence = math.sqrt(var) / mean if mean > 0 else 0.0
+        else:
+            turbulence = math.sqrt(var)
+
         if return_amplitudes:
-            return turbulence, amplitudes
+            return turbulence, amps
         return turbulence
     
     def _calculate_variance_two_pass(self):
         """
-        Calculate variance of turbulence buffer
-        
-        Returns:
-            float: Variance (0.0 if buffer not full)
+        Calculate variance of the turbulence buffer (zero-allocation).
+
+        Pass the full pre-allocated buffer to calculate_variance — when the
+        buffer is full, buffer_count == window_size, so no slice is needed.
         """
-        # Return 0 if buffer not full yet (matches C version behavior)
         if self.buffer_count < self.window_size:
             return 0.0
-        
-        # Delegate to static method
-        return self.compute_variance_two_pass(self.turbulence_buffer[:self.buffer_count])
+        return calculate_variance(self.turbulence_buffer)
     
     def set_adaptive_threshold(self, threshold):
         """
@@ -318,13 +380,13 @@ class SegmentationContext:
         return self.state
     
     def get_metrics(self):
-        """Get current metrics as dict"""
-        return {
-            'moving_variance': self.current_moving_variance,
-            'threshold': self.threshold,
-            'turbulence': self.last_turbulence,
-            'state': self.state
-        }
+        """Get current metrics — mutates and returns the same dict each call."""
+        m = self._metrics
+        m['moving_variance'] = self.current_moving_variance
+        m['threshold'] = self.threshold
+        m['turbulence'] = self.last_turbulence
+        m['state'] = self.state
+        return m
     
     def reset(self, full=False):
         """
@@ -338,13 +400,16 @@ class SegmentationContext:
         self.packet_index = 0
         
         if full:
-            self.turbulence_buffer = [0.0] * self.window_size
+            # Clear in place — don't reallocate the buffer (~600 B churn).
+            for i in range(self.window_size):
+                self.turbulence_buffer[i] = 0.0
             self.buffer_index = 0
             self.buffer_count = 0
             self.current_moving_variance = 0.0
             self.last_turbulence = 0.0
-            self.last_amplitudes = None
-            
+            self._amp_count = 0
+            # Note: last_amplitudes intentionally still points at the scratch.
+
             # Reset filters
             if self.lowpass_filter is not None:
                 self.lowpass_filter.reset()

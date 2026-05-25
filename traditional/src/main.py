@@ -322,7 +322,14 @@ def run_gain_lock(wlan):
     # Calculate medians (more robust than mean against outliers)
     median_agc = calculate_median(agc_samples)
     median_fft = calculate_median(fft_samples)
-    
+
+    # Free the 300-element sample lists immediately — the NBVI calibrator
+    # allocates its 1.6 KB batch buffer next and needs contiguous heap.
+    agc_samples.clear()
+    fft_samples.clear()
+    del agc_samples, fft_samples
+    gc.collect()
+
     print(f"  HT20 mode: {NUM_SUBCARRIERS} subcarriers")
     
     # Handle different modes
@@ -472,26 +479,28 @@ def run_band_calibration(wlan, detector, traffic_gen, chip_type=None):
     while calibration_progress < config.CALIBRATION_BUFFER_SIZE:
         frame = wlan.csi_read()
         packets_read += 1
-        
+
         if frame:
-            csi_data, raw_len, remap_tag = normalize_ht20_csi_payload(
-                frame[5], EXPECTED_CSI_LEN, remap_buffer=ht57_remap_buffer
-            )
+            try:
+                csi_data, raw_len, remap_tag = normalize_ht20_csi_payload(
+                    frame[5], EXPECTED_CSI_LEN, remap_buffer=ht57_remap_buffer
+                )
 
-            if csi_data is None:
-                filtered_count += 1
-                if filtered_count % 100 == 1:
-                    print(f"[WARN] Filtered {filtered_count} packets with wrong SC count (got {raw_len} bytes, expected {EXPECTED_CSI_LEN})")
+                if csi_data is None:
+                    filtered_count += 1
+                    if filtered_count % 100 == 1:
+                        print(f"[WARN] Filtered {filtered_count} packets with wrong SC count (got {raw_len} bytes, expected {EXPECTED_CSI_LEN})")
+                    continue
+
+                if remap_tag in ('double_ht20', 'double_ht57_and_remap') and not collapse_logged:
+                    print("[INFO] CSI double-length collapse active: 256->128 and/or 228->114")
+                    collapse_logged = True
+                if remap_tag in ('ht57_to_64', 'double_ht57_and_remap') and not remap_logged:
+                    print("[INFO] CSI remap active: 57->64 SC (left_pad=4, right_pad=3)")
+                    remap_logged = True
+            finally:
                 del frame
-                continue
 
-            if remap_tag in ('double_ht20', 'double_ht57_and_remap') and not collapse_logged:
-                print("[INFO] CSI double-length collapse active: 256->128 and/or 228->114")
-                collapse_logged = True
-            if remap_tag in ('ht57_to_64', 'double_ht57_and_remap') and not remap_logged:
-                print("[INFO] CSI remap active: 57->64 SC (left_pad=4, right_pad=3)")
-                remap_logged = True
-            del frame
             calibration_progress = calibrator.add_packet(csi_data)
             timeout_counter = 0  # Reset timeout on successful read
             
@@ -717,9 +726,13 @@ def main():
     else:
         print(f'Using configured subcarriers: {config.SELECTED_SUBCARRIERS}')
     
-    # Initialize MQTT (non-fatal: detection still works without a broker)
+    # Initialize MQTT (non-fatal: detection still works without a broker).
+    # mqtt_connected is no longer a one-way latch — when it flips False we
+    # schedule a retry via mqtt_reconnect_at_ms so the link self-heals after
+    # WiFi blips, broker restarts, or transient publish errors.
     mqtt_handler = MQTTHandler(config, detector, wlan)
     mqtt_connected = False
+    mqtt_reconnect_at_ms = 0  # 0 = no pending retry; else ticks_ms() when to try
     try:
         mqtt_handler.connect()
         mqtt_connected = True
@@ -728,7 +741,8 @@ def main():
         except Exception as e:
             print(f'MQTT publish_info failed ({e}) — continuing anyway')
     except Exception as e:
-        print(f'MQTT unavailable ({e}) — continuing without publishing')
+        print(f'MQTT unavailable ({e}) — will keep retrying in background')
+        mqtt_reconnect_at_ms = time.ticks_ms() + 5000
     
     print('')
     print('  ESPMotion - WiFi CSI Motion Detection')
@@ -752,8 +766,13 @@ def main():
     last_frame_ms = time.ticks_ms()
     idle_check = 0
     starve_recovering = False
-    CSI_STARVE_MS = 6000     # no CSI this long -> drop MQTT, restart traffic gen
+    CSI_STARVE_MS = 3000     # no CSI this long -> drop MQTT, restart traffic gen
     CSI_REBOOT_MS = 20000    # no CSI this long -> reboot (network stack wedged)
+    # TG escalation: if the traffic generator hasn't successfully sent
+    # anything in this long, the radio link is gone regardless of what
+    # isconnected() says. Trigger the same recovery as CSI starvation,
+    # but without waiting for the longer CSI timer.
+    TG_STALL_MS = 2000
     collapse_logged = False
     remap_logged = False
     ht57_remap_buffer = bytearray(EXPECTED_CSI_LEN)
@@ -776,29 +795,31 @@ def main():
             frame = wlan.csi_read()
 
             if frame:
-                last_frame_ms = time.ticks_ms()
-                starve_recovering = False
-                csi_data, raw_len, remap_tag = normalize_ht20_csi_payload(
-                    frame[5], EXPECTED_CSI_LEN, remap_buffer=ht57_remap_buffer
-                )
+                # try/finally guarantees `del frame` even if normalize or the
+                # detector raises — otherwise the frame leaks per packet.
+                try:
+                    last_frame_ms = time.ticks_ms()
+                    starve_recovering = False
+                    csi_data, raw_len, remap_tag = normalize_ht20_csi_payload(
+                        frame[5], EXPECTED_CSI_LEN, remap_buffer=ht57_remap_buffer
+                    )
 
-                if csi_data is None:
-                    filtered_count += 1
-                    if filtered_count % 100 == 1:
-                        print(f"[WARN] Filtered {filtered_count} packets with wrong SC count (got {raw_len} bytes, expected {EXPECTED_CSI_LEN})")
+                    if csi_data is None:
+                        filtered_count += 1
+                        if filtered_count % 100 == 1:
+                            print(f"[WARN] Filtered {filtered_count} packets with wrong SC count (got {raw_len} bytes, expected {EXPECTED_CSI_LEN})")
+                        continue
+
+                    if remap_tag in ('double_ht20', 'double_ht57_and_remap') and not collapse_logged:
+                        print("[INFO] CSI double-length collapse active: 256->128 and/or 228->114")
+                        collapse_logged = True
+                    if remap_tag in ('ht57_to_64', 'double_ht57_and_remap') and not remap_logged:
+                        print("[INFO] CSI remap active: 57->64 SC (left_pad=4, right_pad=3)")
+                        remap_logged = True
+                    packet_channel = frame[1]
+                finally:
                     del frame
-                    continue
 
-                if remap_tag in ('double_ht20', 'double_ht57_and_remap') and not collapse_logged:
-                    print("[INFO] CSI double-length collapse active: 256->128 and/or 228->114")
-                    collapse_logged = True
-                if remap_tag in ('ht57_to_64', 'double_ht57_and_remap') and not remap_logged:
-                    print("[INFO] CSI remap active: 57->64 SC (left_pad=4, right_pad=3)")
-                    remap_logged = True
-                packet_channel = frame[1]
-                
-                del frame
-                
                 # Process packet through detector interface
                 detector.process_packet(csi_data, config.SELECTED_SUBCARRIERS)
                 
@@ -849,10 +870,43 @@ def main():
                                 pps
                             )
                         except Exception as e:
-                            print(f'MQTT publish error ({e}) — disabling for this session')
+                            print(f'MQTT publish error ({e}) — will reconnect')
                             mqtt_connected = False
+                            try:
+                                mqtt_handler.disconnect()
+                            except Exception:
+                                pass
+                            mqtt_reconnect_at_ms = time.ticks_ms() + 5000
+                    elif mqtt_reconnect_at_ms and \
+                            time.ticks_diff(time.ticks_ms(), mqtt_reconnect_at_ms) >= 0:
+                        # Retry MQTT once per publish window. reconnect() has
+                        # its own backoff floor; this just gates how often we
+                        # ask it. Successful reconnect republishes info so the
+                        # web monitor sees the device come back.
+                        #
+                        # Bare except: a stale on-device handler.py (deploy
+                        # skew) used to raise AttributeError here and wedge
+                        # the whole loop. Now we log and reschedule.
+                        try:
+                            ok = mqtt_handler.reconnect()
+                        except Exception as e:
+                            print(f'MQTT reconnect crashed ({e}) — will retry')
+                            ok = False
+                        if ok:
+                            mqtt_connected = True
+                            mqtt_reconnect_at_ms = 0
+                            try:
+                                mqtt_handler.publish_info()
+                            except Exception:
+                                pass
+                        else:
+                            mqtt_reconnect_at_ms = time.ticks_ms() + 5000
                     publish_counter = 0
                     last_publish_time = current_time
+                    # Reclaim the small transient allocations from the publish
+                    # path (json.dumps, print formatting, etc.) before they
+                    # accumulate. Runs ~once per second — cheap.
+                    gc.collect()
 
                 # Update loop time metric
                 g_state.loop_time_us = time.ticks_diff(time.ticks_us(), loop_start)
@@ -883,24 +937,41 @@ def main():
                         time.sleep(1)
                         machine.reset()
 
-                    elif gap_ms > CSI_STARVE_MS and not starve_recovering:
-                        # Stage 1: CSI stalled. The usual cause is the
-                        # WiFi link dropping silently (sendto keeps
-                        # succeeding but nothing transmits). Drop MQTT to
-                        # free lwIP, then force a WiFi re-association —
-                        # the in-place fix that avoids a full reboot.
-                        print(f'[WARN] No CSI for 6s — WiFi connected={wlan.isconnected()}, recovering')
-                        if mqtt_connected:
-                            try:
-                                mqtt_handler.disconnect()
-                            except Exception:
-                                pass
-                            mqtt_connected = False
-                        reconnect_wifi(wlan, force=True)
-                        starve_recovering = True
-                        # Fresh window: let CSI resume before the reboot
-                        # timer (CSI_REBOOT_MS) is evaluated again.
-                        last_frame_ms = time.ticks_ms()
+                    else:
+                        # Two triggers for the same recovery path:
+                        # 1. CSI starvation (no frames in CSI_STARVE_MS)
+                        # 2. TG escalation: TG can't sendto() for TG_STALL_MS,
+                        #    proving the AP is gone even if isconnected()
+                        #    still reports True. Catches the stale-
+                        #    association case earlier than (1).
+                        tg_stalled = False
+                        if traffic_gen.is_running() and traffic_gen.last_send_success_ms:
+                            tg_gap = time.ticks_diff(
+                                time.ticks_ms(), traffic_gen.last_send_success_ms
+                            )
+                            tg_stalled = tg_gap > TG_STALL_MS
+
+                        if (gap_ms > CSI_STARVE_MS or tg_stalled) and not starve_recovering:
+                            cause = 'TG stalled' if tg_stalled and gap_ms <= CSI_STARVE_MS \
+                                else f'No CSI for {gap_ms}ms'
+                            print(f'[WARN] {cause} — WiFi connected={wlan.isconnected()}, recovering')
+                            if mqtt_connected:
+                                try:
+                                    mqtt_handler.disconnect()
+                                except Exception:
+                                    pass
+                                mqtt_connected = False
+                            reconnect_wifi(wlan, force=True)
+                            starve_recovering = True
+                            # Schedule MQTT reconnect 2s after WiFi recovery so
+                            # the next publish window picks it up.
+                            mqtt_reconnect_at_ms = time.ticks_ms() + 2000
+                            # Fresh window: let CSI resume before the reboot
+                            # timer (CSI_REBOOT_MS) is evaluated again.
+                            last_frame_ms = time.ticks_ms()
+                            # Reset the TG success timestamp so we don't
+                            # immediately re-trigger before the radio comes back.
+                            traffic_gen.last_send_success_ms = time.ticks_ms()
 
                 time.sleep_us(100)
     

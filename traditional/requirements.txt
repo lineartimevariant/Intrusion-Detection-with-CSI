@@ -3,5 +3,8 @@
 
 esptool==5.2.0          # Flash firmware to ESP32 (pinned for ESPHome 2026.3.0 compatibility)
 mpremote>=1.26.1        # Deploy code to MicroPython device (used as CLI tool)
+mpy-cross>=1.22.0       # Compile .py → .mpy for ./me deploy (smaller RAM footprint on ESP32).
+                        # Must match the MicroPython version baked into firmware/ESP32_CSI.bin.
+                        # Use ./me deploy --no-mpy to upload raw .py if a mismatch occurs.
 pyserial>=3.5           # Serial port detection and communication
 colorama>=0.4.6         # Terminal colors

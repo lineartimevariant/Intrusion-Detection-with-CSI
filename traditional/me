@@ -5,6 +5,8 @@ import time
 import argparse
 import webbrowser
 import subprocess
+import tempfile
+import shutil
 from pathlib import Path
 from typing import List, Tuple
 
@@ -504,13 +506,85 @@ def deploy_code(args):
             ('src/mqtt/handler.py', ':src/mqtt/'),
         ]
 
-        for src, dst in files_to_upload:
-            if not Path(src).exists():
-                print(f"{Fore.RED}  ❌ File not found: {src}{Style.RESET_ALL}")
-                continue
-            print(f"  {src} → {dst}")
-            subprocess.run(['mpremote', 'connect', port, 'cp', src, dst],
-                          check=True, capture_output=True)
+        # Files that must stay as plain .py on the device:
+        #   - config_local.py: user-editable in place via mpremote
+        #   - main.py: stays .py so the device's autorun-on-boot picks it up
+        #     reliably (MicroPython searches main.py before main.mpy)
+        KEEP_AS_PY = {'src/config_local.py', 'src/main.py'}
+
+        use_mpy = not getattr(args, 'no_mpy', False)
+        mpy_tmp_ctx = None
+        if use_mpy:
+            mpy_cross_bin = shutil.which('mpy-cross')
+            if not mpy_cross_bin:
+                print(f"{Fore.YELLOW}  ⚠ mpy-cross not found — falling back to .py upload.{Style.RESET_ALL}")
+                print(f"     Install with: pip install mpy-cross   (or run ./me deploy --no-mpy)")
+                use_mpy = False
+
+        if use_mpy:
+            print(f"{Fore.CYAN}  ⚙ Compiling .py → .mpy (mpy-cross){Style.RESET_ALL}")
+            mpy_tmp_ctx = tempfile.TemporaryDirectory(prefix='espmotion-mpy-')
+            mpy_dir = Path(mpy_tmp_ctx.name)
+            compiled: List[Tuple[str, str]] = []
+            for src, dst in files_to_upload:
+                if not Path(src).exists():
+                    compiled.append((src, dst))
+                    continue
+                if src in KEEP_AS_PY:
+                    compiled.append((src, dst))
+                    continue
+                out_name = Path(src).stem + '.mpy'
+                # Mirror src tree under tmp dir so __init__.mpy etc. land in
+                # the right relative locations.
+                out_path = mpy_dir / Path(src).parent / out_name
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    subprocess.run(
+                        [mpy_cross_bin, '-o', str(out_path), src],
+                        check=True, capture_output=True, text=True
+                    )
+                except subprocess.CalledProcessError as e:
+                    print(f"{Fore.RED}  ❌ mpy-cross failed on {src}: {e.stderr}{Style.RESET_ALL}")
+                    raise
+                compiled.append((str(out_path), dst))
+            files_to_upload = compiled
+
+        try:
+            for src, dst in files_to_upload:
+                if not Path(src).exists():
+                    print(f"{Fore.RED}  ❌ File not found: {src}{Style.RESET_ALL}")
+                    continue
+                # Display the destination filename so user sees .mpy vs .py
+                src_name = Path(src).name
+                shown_dst = dst + src_name if dst.endswith('/') else dst
+                print(f"  {src} → {shown_dst}")
+                subprocess.run(['mpremote', 'connect', port, 'cp', src, dst],
+                              check=True, capture_output=True)
+
+                # Remove the stale shadow on the device. MicroPython looks
+                # up .py BEFORE .mpy — if both exist, the old .py wins and
+                # silently masks the freshly-uploaded .mpy. We delete the
+                # shadow so only the just-uploaded file is loadable.
+                if src_name.endswith('.mpy'):
+                    shadow = src_name[:-4] + '.py'
+                elif src_name.endswith('.py'):
+                    shadow = src_name[:-3] + '.mpy'
+                else:
+                    shadow = None
+                if shadow:
+                    shadow_remote = (dst + shadow) if dst.endswith('/') else \
+                        str(Path(dst).with_name(shadow))
+                    # rm is best-effort: silently ignore "no such file" (the
+                    # first deploy on a clean device has nothing to remove).
+                    subprocess.run(
+                        ['mpremote', 'connect', port, 'rm', shadow_remote],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+        finally:
+            if mpy_tmp_ctx is not None:
+                mpy_tmp_ctx.cleanup()
 
         print()
         print(f"{Fore.GREEN}✅ Deployment complete!{Style.RESET_ALL}")
@@ -759,6 +833,8 @@ Examples:
     deploy_parser = subparsers.add_parser('deploy', help='Deploy code to MicroPython device')
     deploy_parser.add_argument('--port',
                               help='Serial port (auto-detected if not specified)')
+    deploy_parser.add_argument('--no-mpy', action='store_true',
+                              help='Upload raw .py instead of .mpy bytecode (slower import, more RAM)')
 
     # Run command
     run_parser = subparsers.add_parser('run', help='Run application on ESP32')

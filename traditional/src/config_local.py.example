@@ -8,7 +8,12 @@ Copy this file to config_local.py and update with your settings
 # WiFi Configuration
 WIFI_SSID = "YourSSID"
 WIFI_PASSWORD = "YourPassword"
-# Optional AP lock (helps on mesh networks)
+# Optional AP lock — strongly recommended if your network has multiple
+# access points sharing one SSID (mesh, range extenders, dual-band steering)
+# OR if you see periodic "No CSI for Ns" warnings in the run output.
+# Without this, the ESP32 may roam to a weaker AP or get silently dropped
+# during a handoff, leading to the stale-association recovery path.
+# Find the MAC of your preferred AP in your router admin UI.
 # WIFI_BSSID = "AA:BB:CC:DD:EE:FF"
 
 # MQTT Configuration

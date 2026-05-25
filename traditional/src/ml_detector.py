@@ -49,6 +49,13 @@ ML_MIN_THRESHOLD = 0.0
 ML_MAX_THRESHOLD = 10.0
 ML_METRIC_SCALE = 10.0
 
+# Pre-allocated scratch for predict() — sizes match the MLP architecture
+# (12 inputs, 16 hidden, 8 hidden). These are reused on every inference so
+# the forward pass allocates nothing.
+_NORMALIZED_SCRATCH = [0.0] * 12
+_H1_SCRATCH = [0.0] * 16
+_H2_SCRATCH = [0.0] * 8
+
 # ============================================================================
 # Neural Network Inference Functions
 # ============================================================================
@@ -68,49 +75,51 @@ def sigmoid(x):
 
 
 def normalize_features(features):
-    """Normalize features using pre-computed mean and scale."""
-    normalized = []
+    """Normalize features in-place into the shared scratch buffer."""
+    x = _NORMALIZED_SCRATCH
     for i in range(len(features)):
-        normalized.append((features[i] - FEATURE_MEAN[i]) / FEATURE_SCALE[i])
-    return normalized
+        x[i] = (features[i] - FEATURE_MEAN[i]) / FEATURE_SCALE[i]
+    return x
 
 
 def predict(features):
     """
     Predict motion probability from 12 features.
-    
+
     Architecture: 12 -> 16 (ReLU) -> 8 (ReLU) -> 1 (Sigmoid)
-    
+
+    Reuses module-level scratch buffers — zero allocations per call.
+
     Args:
         features: List of 12 feature values
-    
+
     Returns:
         float: Scaled motion metric (0.0 to 10.0)
     """
-    # Normalize
+    # Normalize (writes into _NORMALIZED_SCRATCH)
     x = normalize_features(features)
-    
+    h1 = _H1_SCRATCH
+    h2 = _H2_SCRATCH
+
     # Layer 1: 12 -> 16 (ReLU)
-    h1 = []
     for j in range(16):
         val = B1[j]
         for i in range(12):
             val += x[i] * W1[i][j]
-        h1.append(relu(val))
-    
+        h1[j] = val if val > 0 else 0.0
+
     # Layer 2: 16 -> 8 (ReLU)
-    h2 = []
     for j in range(8):
         val = B2[j]
         for i in range(16):
             val += h1[i] * W2[i][j]
-        h2.append(relu(val))
-    
+        h2[j] = val if val > 0 else 0.0
+
     # Layer 3: 8 -> 1 (Sigmoid)
     out = B3[0]
     for i in range(8):
         out += h2[i] * W3[i][0]
-    
+
     return sigmoid(out) * ML_METRIC_SCALE
 
 
@@ -189,9 +198,22 @@ class MLDetector(IDetector):
         self.probability_history = []
         self.state_history = []
         self.track_data = False
-        
+
         # Store current amplitudes for feature extraction
         self._current_amplitudes = None
+
+        # Pre-allocated chronological mirror of the circular turbulence
+        # buffer. Filled in-place each publish so _extract_features() never
+        # allocates a slice+concat (the old hot path: ~1.8 KB per publish).
+        self._chrono_buf = [0.0] * window_size
+
+        # Reusable metrics dict — mutated in place each update_state() so
+        # publish never allocates a fresh dict.
+        self._metrics = {
+            'state': self._state,
+            'probability': 0.0,
+            'threshold': self._threshold,
+        }
     
     def process_packet(self, csi_data, selected_subcarriers=None):
         """
@@ -218,66 +240,75 @@ class MLDetector(IDetector):
     def update_state(self):
         """
         Run inference and update state.
-        
+
         Returns:
-            dict: Current metrics including state and probability
+            dict: Current metrics (the same instance dict is mutated and
+            returned each call — callers must read values immediately).
         """
+        m = self._metrics
         if not self.is_ready():
-            return {
-                'state': self._state,
-                'probability': 0.0,
-                'threshold': self._threshold
-            }
-        
+            m['state'] = self._state
+            m['probability'] = 0.0
+            m['threshold'] = self._threshold
+            return m
+
         # Extract features from turbulence buffer
         features = self._extract_features()
-        
+
         # Run neural network
         self._current_probability = predict(features)
-        
+
         # Update state
         if self._current_probability > self._threshold:
             self._state = MotionState.MOTION
         else:
             self._state = MotionState.IDLE
-        
+
         if self.track_data:
             self.probability_history.append(self._current_probability)
             state_str = 'MOTION' if self._state == MotionState.MOTION else 'IDLE'
             self.state_history.append(state_str)
             if self._state == MotionState.MOTION:
                 self._motion_count += 1
-        
-        return {
-            'state': self._state,
-            'probability': self._current_probability,
-            'threshold': self._threshold
-        }
+
+        m['state'] = self._state
+        m['probability'] = self._current_probability
+        m['threshold'] = self._threshold
+        return m
     
     def _extract_features(self):
         """
         Extract 12 features from turbulence buffer using centralized extractor.
-        
-        IMPORTANT: The turbulence_buffer is a circular buffer. After wrap-around,
-        a simple slice [:buffer_count] would NOT be in chronological order.
-        Features like slope, delta, zcr, and autocorr depend on temporal order.
-        
-        We reconstruct the chronological order: [oldest ... newest]
+
+        The turbulence_buffer is a circular buffer; after wrap-around a slice
+        is not chronological, and features like slope/zcr/autocorr depend on
+        temporal order. We copy into a pre-allocated chronological mirror
+        in place — no slice, no concat, zero allocations.
         """
         ctx = self._context
-        
-        # Build chronological list from circular buffer
+        src = ctx.turbulence_buffer
+        dst = self._chrono_buf
+
         if ctx.buffer_count < ctx.window_size:
             # Buffer not full yet: data is in order from index 0
-            turb_list = ctx.turbulence_buffer[:ctx.buffer_count]
+            n = ctx.buffer_count
+            for i in range(n):
+                dst[i] = src[i]
         else:
-            # Buffer is full and has wrapped: reconstruct order
-            # buffer_index points to the NEXT write position (oldest value)
+            # Wrapped: copy [idx:] then [:idx] into dst.
             idx = ctx.buffer_index
-            turb_list = ctx.turbulence_buffer[idx:] + ctx.turbulence_buffer[:idx]
-        
+            ws = ctx.window_size
+            n = ws
+            j = 0
+            for i in range(idx, ws):
+                dst[j] = src[i]
+                j += 1
+            for i in range(0, idx):
+                dst[j] = src[i]
+                j += 1
+
         return extract_features_by_name(
-            turb_list, len(turb_list), 
+            dst, n,
             amplitudes=self._current_amplitudes,
             feature_names=DEFAULT_FEATURES
         )

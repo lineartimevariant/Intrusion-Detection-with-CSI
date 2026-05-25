@@ -32,6 +32,11 @@ class TrafficGenerator:
         self.start_time = 0  # Time when generator started (ticks_ms)
         self.avg_loop_time_ms = 0  # Average loop time for diagnostics
         self.actual_pps = 0  # Actual packets per second (moving window)
+        # Timestamp of the most recent successful sendto(). The main loop
+        # reads this to detect "TG can't reach AP" earlier than the CSI
+        # watchdog would: a large gap here means the WiFi link is gone
+        # even if isconnected() still reports True.
+        self.last_send_success_ms = 0
         
     def _get_gateway_ip(self):
         """Get gateway IP address from network interface"""
@@ -112,6 +117,7 @@ class TrafficGenerator:
                     self.packet_count += 1
                     window_packet_count += 1
                     consecutive_errors = 0
+                    self.last_send_success_ms = time.ticks_ms()
 
                 except OSError as e:
                     # Socket error (e.g., network unavailable, ENOMEM)
@@ -247,6 +253,7 @@ class TrafficGenerator:
         self.error_count = 0
         self.rate_pps = rate_pps
         self.start_time = time.ticks_ms()
+        self.last_send_success_ms = self.start_time
         self.running = True
         
         # Start background task

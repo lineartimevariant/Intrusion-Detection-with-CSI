@@ -16,6 +16,23 @@ try:
 except ImportError:
     from utils import insertion_sort
 
+# Module-level scratch buffers reused across feature calls. Sized lazily on
+# first use, never freed — keeps the heap quiet (no per-publish allocations
+# for MAD sort / entropy bins). Safe because the detector is single-threaded.
+_sort_buf = None
+_abs_buf = None
+_bins_buf = None
+
+
+def _ensure_scratch(buffer_count, n_bins):
+    """Lazily grow scratch buffers to fit. No-op when already large enough."""
+    global _sort_buf, _abs_buf, _bins_buf
+    if _sort_buf is None or len(_sort_buf) < buffer_count:
+        _sort_buf = [0.0] * buffer_count
+        _abs_buf = [0.0] * buffer_count
+    if _bins_buf is None or len(_bins_buf) < n_bins:
+        _bins_buf = [0] * n_bins
+
 
 def calc_skewness(values, count, mean, std):
     """Calculate Fisher skewness (3rd standardized moment)."""
@@ -64,7 +81,10 @@ def calc_entropy_turb(turbulence_buffer, buffer_count, n_bins=10):
         return 0.0
 
     bin_width = (max_val - min_val) / n_bins
-    bins = [0] * n_bins
+    _ensure_scratch(buffer_count, n_bins)
+    bins = _bins_buf
+    for i in range(n_bins):
+        bins[i] = 0
     for i in range(buffer_count):
         val = turbulence_buffer[i]
         bin_idx = int((val - min_val) / bin_width)
@@ -74,7 +94,8 @@ def calc_entropy_turb(turbulence_buffer, buffer_count, n_bins=10):
 
     entropy = 0.0
     log2 = math.log(2)
-    for count in bins:
+    for j in range(n_bins):
+        count = bins[j]
         if count > 0:
             p = count / buffer_count
             entropy -= p * math.log(p) / log2
@@ -135,7 +156,8 @@ def calc_mad(turbulence_buffer, buffer_count):
     if buffer_count < 2:
         return 0.0
 
-    sorted_vals = [0.0] * buffer_count
+    _ensure_scratch(buffer_count, 10)
+    sorted_vals = _sort_buf
     for i in range(buffer_count):
         sorted_vals[i] = turbulence_buffer[i]
     insertion_sort(sorted_vals, buffer_count)
@@ -146,7 +168,7 @@ def calc_mad(turbulence_buffer, buffer_count):
     else:
         median = sorted_vals[mid]
 
-    abs_devs = [0.0] * buffer_count
+    abs_devs = _abs_buf
     for i in range(buffer_count):
         abs_devs[i] = abs(turbulence_buffer[i] - median)
     insertion_sort(abs_devs, buffer_count)

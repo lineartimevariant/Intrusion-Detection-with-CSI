@@ -36,6 +36,11 @@ class MQTTHandler:
         self.last_variance = 0.0
         self.last_state = 0  # STATE_IDLE
 
+        # Reconnect backoff: floor between attempts so a dead broker
+        # doesn't spin us. ticks_ms() of the last attempt, or 0.
+        self._last_reconnect_attempt_ms = 0
+        self._reconnect_backoff_ms = 5000
+
     # Socket timeout applied before every MQTT op. umqtt.simple internally
     # calls sock.setblocking(True) at the end of wait_msg(), which clears
     # any timeout we set after connect — so we MUST re-apply it each time
@@ -131,13 +136,53 @@ class MQTTHandler:
         self.last_state = current_state
 
     def disconnect(self):
-        """Disconnect from MQTT broker"""
-        if self.client:
-            try:
-                self.client.disconnect()
-                print('MQTT disconnected')
-            except Exception as e:
-                print(f"Error disconnecting MQTT: {e}")
+        """Disconnect from MQTT broker and release the socket.
+
+        umqtt.simple.disconnect() only sends the MQTT DISCONNECT packet;
+        if that send fails (broker already gone, link flapping) the
+        underlying socket is never closed and lwIP holds its buffer for
+        the rest of the session. We force-close it ourselves so reconnect
+        starts from a clean slate.
+        """
+        if not self.client:
+            return
+        try:
+            self.client.disconnect()
+        except Exception as e:
+            print(f"Error disconnecting MQTT: {e}")
+        try:
+            sock = getattr(self.client, 'sock', None)
+            if sock is not None:
+                sock.close()
+        except Exception:
+            pass
+        self.client = None
+        print('MQTT disconnected')
+
+    def reconnect(self):
+        """Re-establish the MQTT connection, with a backoff floor.
+
+        Returns True on success, False otherwise. Never raises — callers
+        loop on the boolean. Honours _reconnect_backoff_ms so a hammered
+        broker isn't pummelled further.
+        """
+        import time as _t
+        now = _t.ticks_ms()
+        if self._last_reconnect_attempt_ms:
+            since = _t.ticks_diff(now, self._last_reconnect_attempt_ms)
+            if since < self._reconnect_backoff_ms:
+                return False
+        self._last_reconnect_attempt_ms = now
+
+        # Always drop any half-open client first.
+        self.disconnect()
+
+        try:
+            self.connect()
+            return True
+        except Exception as e:
+            print(f'MQTT reconnect failed: {e}')
+            return False
 
     def publish_info(self):
         """Publish a one-shot device info message to {topic}/info."""
