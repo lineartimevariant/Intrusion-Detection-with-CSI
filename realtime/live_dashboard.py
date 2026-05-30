@@ -20,14 +20,15 @@ MODEL_PATH = os.path.join(
     BASE_DIR,
     "data",
     "models",
-    "cnn_lstm_tvat_binary.h5"
+   # "cnn_lstm_tvat_binary.h5"
+    "tcn_tvat_binary.h5"
 )
 
 # ==========================================================
 # SERIAL CONFIG
 # ==========================================================
 
-PORT = "/dev/ttyUSB1"
+PORT = "/dev/ttyUSB0"
 BAUD = 115200
 
 # ==========================================================
@@ -43,8 +44,8 @@ THRESHOLD = 0.5
 # ==========================================================
 # LOAD MODEL
 # ==========================================================
-
-print("Loading CNN+LSTM model...")
+print(" loading TCN model...")
+#print("Loading CNN+LSTM model...")
 model = load_model(MODEL_PATH)
 print("Model loaded.")
 
