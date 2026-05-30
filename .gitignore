@@ -35,3 +35,5 @@ logs/
 # Large datasets
 data/raw/*.csv
 data/external/Personal access token.txt
+Personal access token.txt
+data/external/
