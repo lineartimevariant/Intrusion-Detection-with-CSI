@@ -37,11 +37,6 @@ DEFAULT_SUBCARRIERS = [12, 14, 16, 18, 20, 24, 28, 36, 40, 44, 48, 52]
 GAIN_LOCK_MODE = "auto"       # Recommended: "auto" - skips gain lock if AGC < 30
 GAIN_LOCK_MIN_SAFE_AGC = 30   # Minimum safe AGC value (below this, gain lock is skipped in auto mode)
 
-# Detection Algorithm
-# "mvs" (default): Moving Variance Segmentation - fast, good accuracy
-# "ml": Neural Network (12 features -> MLP) - learned patterns, no calibration needed
-DETECTION_ALGORITHM = "mvs"
-
 # Band Calibration Configuration (used when SELECTED_SUBCARRIERS is None)
 # NBVI: Normalized Band Variance Index (12 non-consecutive subcarriers)
 CALIBRATION_NUM_WINDOWS = 10   # Number of windows worth of packets to collect

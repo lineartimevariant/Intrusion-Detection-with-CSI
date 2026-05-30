@@ -75,19 +75,15 @@ All defaults live in `src/config.py`; your secrets and overrides go in
 | `WIFI_SSID` / `WIFI_PASSWORD` | — | WiFi credentials (set in `config_local.py`) |
 | `MQTT_BROKER` / `MQTT_PORT` | `homeassistant.local` / `1883` | MQTT broker |
 | `MQTT_TOPIC` | `home/espmotion/node1` | Topic state is published to |
-| `DETECTION_ALGORITHM` | `mvs` | `mvs` (moving-variance) or `ml` (neural net) |
 | `SEG_THRESHOLD` | `auto` | `auto`, `min`, or a fixed number |
 | `SEG_WINDOW_SIZE` | `75` | Moving-variance window, in packets |
 | `TRAFFIC_GENERATOR_RATE` | `100` | Background packets/sec (keeps CSI flowing) |
 
-## Detection algorithms
+## Detection algorithm
 
-- **MVS** (default) — Moving Variance Segmentation. Fast, no training needed,
-  auto-calibrates threshold and subcarriers at boot.
-- **ML** — a small neural network (MLP, 12→16→8→1) running on pre-trained weights.
-  Kept as a **working foundation**: the on-device inference path is complete, but
-  the host-side *training* pipeline is not part of this codebase. See the
-  "ML detector (foundation)" section of [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
+**MVS** — Moving Variance Segmentation. Fast, no training needed, auto-calibrates
+the threshold and the 12 subcarriers at boot. See
+[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for the full pipeline.
 
 ## Documentation
 

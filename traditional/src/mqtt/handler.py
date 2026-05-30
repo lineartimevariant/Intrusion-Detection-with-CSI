@@ -20,7 +20,7 @@ class MQTTHandler:
 
         Args:
             config: Configuration module
-            detector: IDetector instance (MVSDetector or MLDetector)
+            detector: MVSDetector instance
             wlan: WLAN instance
         """
         self.config = config
@@ -87,7 +87,7 @@ class MQTTHandler:
         Publish current state to MQTT
 
         Args:
-            current_variance: Current moving variance (or probability for ML)
+            current_variance: Current moving variance
             current_state: Current state (0=IDLE, 1=MOTION)
             current_threshold: Current threshold
             packet_delta: Packets processed since last publish

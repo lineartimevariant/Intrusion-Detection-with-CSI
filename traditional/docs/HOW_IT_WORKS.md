@@ -108,7 +108,7 @@ the stream of those values is the signal everything downstream works on.
 
 ## 7. Filters and moving-variance segmentation (MVS)
 
-MVS is the default algorithm (`DETECTION_ALGORITHM = "mvs"`).
+MVS is the detection algorithm ESPMotion uses.
 
 ### Filters
 
@@ -164,68 +164,3 @@ never accepts commands.
 Publishing is best-effort: transient `ENOMEM`/`EAGAIN` errors are skipped, and a
 genuinely broken connection is dropped so detection keeps running. The exact JSON
 schema is in [USAGE.md](USAGE.md#7-mqtt-payloads).
-
-## ML detector (foundation)
-
-ESPMotion ships a second, optional detector — a small neural network — enabled with
-`DETECTION_ALGORITHM = "ml"` in `config.py`. It is included as a **working
-foundation to rebuild from**, not a finished feature.
-
-### What is present
-
-The complete **on-device inference path** (`src/ml_detector.py`,
-`src/ml_weights.py`):
-
-- **Architecture:** a multilayer perceptron, `12 → 16 (ReLU) → 8 (ReLU) → 1
-  (Sigmoid)`. The sigmoid output is scaled to 0–10 and compared to a threshold.
-- **Input:** the same turbulence signal as MVS — but instead of a single variance,
-  **12 statistical features** are extracted from the turbulence window
-  (`src/features.py`):
-
-  | # | Feature | Meaning |
-  |---|---------|---------|
-  | 1 | `turb_mean` | mean turbulence |
-  | 2 | `turb_std` | standard deviation |
-  | 3 | `turb_max` | window maximum |
-  | 4 | `turb_min` | window minimum |
-  | 5 | `turb_zcr` | zero-crossing rate (around the mean) |
-  | 6 | `turb_skewness` | distribution asymmetry |
-  | 7 | `turb_kurtosis` | distribution peakedness |
-  | 8 | `turb_entropy` | signal entropy |
-  | 9 | `turb_autocorr` | lag-1 autocorrelation |
-  | 10 | `turb_mad` | median absolute deviation |
-  | 11 | `turb_slope` | linear trend over the window |
-  | 12 | `waveform_length` | cumulative sample-to-sample change |
-
-- Features are standardized with the `FEATURE_MEAN`/`FEATURE_SCALE` vectors baked
-  into `ml_weights.py`, then run through the MLP.
-- The ML path needs only gain lock (no NBVI band calibration), so it boots in ~3 s
-  with a fixed subcarrier set.
-
-### What was removed
-
-The **host-side training pipeline** that produced `ml_weights.py` — labeled-data
-collection, the TensorFlow/scikit-learn training scripts, dataset tooling — is
-**not** part of this codebase. The shipped `ml_weights.py` still works for
-inference, but it cannot be retrained as-is.
-
-### How to rebuild training
-
-To turn this foundation back into a trainable system you would:
-
-1. **Collect labeled CSI.** Capture turbulence windows tagged `idle` vs `motion`
-   (and any other classes you want).
-2. **Extract the 12 features** for each window using the *same* logic as
-   `src/features.py` — the on-device feature extractor is the contract the model
-   must match.
-3. **Standardize and train.** Fit a scaler (mean/scale) on the training features,
-   then train an MLP with the `12 → 16 → 8 → 1` shape (ReLU hidden, sigmoid out)
-   in any framework.
-4. **Export weights.** Write the trained scaler and weight/bias matrices into
-   `src/ml_weights.py` in the format the file already uses
-   (`FEATURE_MEAN`, `FEATURE_SCALE`, `W1`/`B1`, `W2`/`B2`, `W3`/`B3`).
-5. **Deploy** with `./me deploy` and set `DETECTION_ALGORITHM = "ml"`.
-
-Because inference is plain Python arithmetic in `ml_detector.py`, the only contract
-between training and the device is the feature set (§ above) and the weight-file
-layout — keep those identical and any training stack will work.

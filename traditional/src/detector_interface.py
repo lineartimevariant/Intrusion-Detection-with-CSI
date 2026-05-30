@@ -1,8 +1,8 @@
 """
 ESPMotion - Detector Interface
 
-Base class for motion detection algorithms.
-Provides polymorphic interface for MVS and ML detectors.
+Base class for the motion detection algorithm.
+Provides the interface implemented by the MVS detector.
 
 Note: MicroPython doesn't have abc module, so we use a simple base class.
 
@@ -20,9 +20,8 @@ class IDetector:
     Interface for motion detection algorithms.
     
     Implementations:
-    - MVSDetector: Moving Variance Segmentation (default)
-    - MLDetector: Neural Network classifier
-    
+    - MVSDetector: Moving Variance Segmentation
+
     Subclasses must implement all methods.
     """
     
@@ -100,9 +99,9 @@ class IDetector:
     def get_name(self):
         """
         Get detector algorithm name.
-        
+
         Returns:
-            str: "MVS" or "ML"
+            str: "MVS"
         """
         raise NotImplementedError
     

@@ -111,7 +111,7 @@ Once running, each publish interval prints one line:
 | `pkts:100` | CSI packets processed since the last line |
 | `drop:0`   | CSI packets dropped since the last line |
 | `pps:104`  | CSI packets per second |
-| `mvmt:0.8124` | Movement metric (moving variance for MVS, probability×scale for ML) |
+| `mvmt:0.8124` | Movement metric (moving variance) |
 | `thr:1.0150`  | Detection threshold |
 | `IDLE` / `MOTION` | Current detection state |
 
@@ -187,6 +187,3 @@ the live movement/threshold chart and the current state.
 | `No CSI for 6s/20s` warnings | Network stack stalled; the firmware self-heals by re-associating WiFi or rebooting. |
 | `MQTT unavailable … continuing` | Broker unreachable — detection still runs, only MQTT output is lost. Check broker host/port/credentials. |
 | Constant false `MOTION` | Calibrated while the room was not still — restart and stay out of the area for the first ~10 s. |
-
-To switch detection algorithms, set `DETECTION_ALGORITHM = "ml"` (or `"mvs"`) in
-`config.py`, then `./me deploy` again.

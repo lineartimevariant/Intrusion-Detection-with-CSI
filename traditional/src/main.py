@@ -10,10 +10,6 @@ import time
 import gc
 import os
 from src.mvs_detector import MVSDetector
-# MLDetector is imported lazily inside main() only when needed —
-# loading it eats ~5KB of heap that the MVS path doesn't need but
-# critically needs free for the later NBVI calibrator import on
-# plain ESP32 (heap is severely fragmented by then).
 from src.mqtt.handler import MQTTHandler
 from src.traffic_generator import TrafficGenerator
 import src.config as config
@@ -221,21 +217,14 @@ def reconnect_wifi(wlan, force=False):
     return True
 
 
-def format_progress_bar(score, threshold, width=20, is_probability=False):
+def format_progress_bar(score, threshold, width=20):
     """Format progress bar for console output.
-    
-    For MVS: score = metric/threshold, threshold_pos at 75% (15/20)
-    For ML: score = probability, threshold_pos at threshold (e.g., 50% for 0.5)
+
+    score = metric/threshold (already normalized), threshold_pos at 75% (15/20).
     """
-    if is_probability:
-        # ML mode: threshold is a probability (0-1), show it at its actual position
-        threshold_pos = int(threshold * width)
-        filled = int(score * width)
-    else:
-        # MVS mode: score is already normalized (metric/threshold)
-        threshold_pos = 15  # 75% position
-        filled = int(score * threshold_pos)
-    
+    threshold_pos = 15  # 75% position
+    filled = int(score * threshold_pos)
+
     filled = max(0, min(filled, width))
     
     bar = '['
@@ -358,7 +347,7 @@ def run_band_calibration(wlan, detector, traffic_gen, chip_type=None):
     
     Args:
         wlan: WLAN instance
-        detector: IDetector instance (MVSDetector or MLDetector)
+        detector: MVSDetector instance
         traffic_gen: TrafficGenerator instance
         chip_type: Chip type ('C5', 'C6', 'S3', etc.) for subcarrier filtering
     
@@ -367,61 +356,14 @@ def run_band_calibration(wlan, detector, traffic_gen, chip_type=None):
     """
     # Get calibration algorithm from config (default: nbvi)
     algorithm = getattr(config, 'CALIBRATION_ALGORITHM', 'nbvi').lower()
-    
-    # Determine calibration type based on detector
-    detector_name = detector.get_name()
-    is_ml = detector_name == "ML"
-    
-    if is_ml:
-        # ML uses fixed subcarriers - no band calibration needed
-        # Only gain lock is required for stable CSI amplitudes
-        print("ML detector: Using fixed subcarriers (no band calibration needed)")
-        
-        # Set calibration mode for gain lock
-        g_state.calibration_mode = True
-        
-        print('')
-        print('='*60)
-        print('ML Quick Boot - Gain Lock Only')
-        print('='*60)
-        print(f'Free memory: {gc.mem_free()} bytes')
-        print('Please remain still for gain lock...')
-        
-        # Phase 1: Gain Lock only (~3 seconds)
-        agc, fft, needs_cv = run_gain_lock(wlan)
-        
-        # Save CV normalization state
-        if agc is not None and fft is not None:
-            g_state.needs_cv_normalization = needs_cv
-        
-        if needs_cv:
-            print("Note: Proceeding without gain lock (CV normalization enabled)")
-        
-        # CV normalization: only needed when gain is not locked
-        detector.set_cv_normalization(needs_cv)
-        
-        # Use unified default subcarriers from central config
-        config.SELECTED_SUBCARRIERS = config.DEFAULT_SUBCARRIERS
-        
-        print('')
-        print('='*60)
-        print('ML Quick Boot Complete!')
-        print(f'   Subcarriers: {config.SELECTED_SUBCARRIERS}')
-        print(f'   Threshold: 0.5 (probability)')
-        print(f'   Total boot time: ~3 seconds (gain lock only)')
-        print('='*60)
-        print('')
-        
-        g_state.calibration_mode = False
-        return True
-    else:
-        # Defrag aggressively before the import — by this point WiFi/CSI
-        # buffers and the read-loop frame objects have fragmented the heap.
-        # On plain ESP32 a single gc.collect() leaves <500B contiguous;
-        # multiple passes consolidate enough for the module dict to load.
-        for _ in range(4):
-            gc.collect()
-        from src.nbvi_calibrator import NBVICalibrator, cleanup_buffer_file
+
+    # Defrag aggressively before the import — by this point WiFi/CSI
+    # buffers and the read-loop frame objects have fragmented the heap.
+    # On plain ESP32 a single gc.collect() leaves <500B contiguous;
+    # multiple passes consolidate enough for the module dict to load.
+    for _ in range(4):
+        gc.collect()
+    from src.nbvi_calibrator import NBVICalibrator, cleanup_buffer_file
 
     # Set calibration mode to suspend main loop
     g_state.calibration_mode = True
@@ -552,46 +494,33 @@ def run_band_calibration(wlan, detector, traffic_gen, chip_type=None):
     if selected_band and len(selected_band) == 12:
         config.SELECTED_SUBCARRIERS = selected_band
         
-        if is_ml:
-            threshold_source = "fixed (0.5)"
-            success = True
-            
-            print('')
-            print('='*60)
-            print('ML Subcarrier Calibration Successful!')
-            print(f'   Algorithm: {algorithm.upper()} (subcarrier selection only)')
-            print(f'   Selected band: {selected_band}')
-            print(f'   Threshold: {detector.get_threshold():.2f} ({threshold_source})')
-            print('='*60)
-            print('')
+        # Apply adaptive threshold from MV values
+        from src.threshold import calculate_adaptive_threshold
+
+        if isinstance(SEG_THRESHOLD, str):
+            adaptive_threshold, percentile = calculate_adaptive_threshold(cal_values, SEG_THRESHOLD)
+            detector.set_adaptive_threshold(adaptive_threshold)
+            threshold_source = f"{SEG_THRESHOLD} (P{percentile})"
+            print(f'Adaptive threshold: {adaptive_threshold:.4f} ({threshold_source})')
         else:
-            # MVS: apply adaptive threshold from MV values
-            from src.threshold import calculate_adaptive_threshold
-            
-            if isinstance(SEG_THRESHOLD, str):
-                adaptive_threshold, percentile = calculate_adaptive_threshold(cal_values, SEG_THRESHOLD)
-                detector.set_adaptive_threshold(adaptive_threshold)
-                threshold_source = f"{SEG_THRESHOLD} (P{percentile})"
-                print(f'Adaptive threshold: {adaptive_threshold:.4f} ({threshold_source})')
-            else:
-                adaptive_threshold, _ = calculate_adaptive_threshold(cal_values, "auto")
-                detector.set_threshold(float(SEG_THRESHOLD))
-                threshold_source = "manual"
-                print(f'Manual threshold: {SEG_THRESHOLD:.2f} (adaptive would be: {adaptive_threshold:.4f})')
-            
-            del cal_values
-            gc.collect()
-            
-            success = True
-            
-            print('')
-            print('='*60)
-            print('Subcarrier Calibration Successful!')
-            print(f'   Algorithm: {algorithm.upper()}')
-            print(f'   Selected band: {selected_band}')
-            print(f'   Threshold: {detector.get_threshold():.4f} ({threshold_source})')
-            print('='*60)
-            print('')
+            adaptive_threshold, _ = calculate_adaptive_threshold(cal_values, "auto")
+            detector.set_threshold(float(SEG_THRESHOLD))
+            threshold_source = "manual"
+            print(f'Manual threshold: {SEG_THRESHOLD:.2f} (adaptive would be: {adaptive_threshold:.4f})')
+
+        del cal_values
+        gc.collect()
+
+        success = True
+
+        print('')
+        print('='*60)
+        print('Subcarrier Calibration Successful!')
+        print(f'   Algorithm: {algorithm.upper()}')
+        print(f'   Selected band: {selected_band}')
+        print(f'   Threshold: {detector.get_threshold():.4f} ({threshold_source})')
+        print('='*60)
+        print('')
     else:
         print(f"Using default band: {config.SELECTED_SUBCARRIERS}")
         print('')
@@ -638,33 +567,18 @@ def main():
     # Connect to WiFi
     wlan = connect_wifi()
     
-    # Initialize detector based on configured algorithm
-    detection_algorithm = getattr(config, 'DETECTION_ALGORITHM', 'mvs').lower()
+    # Initialize MVS detector
     initial_threshold = getattr(config, 'SEG_THRESHOLD', 1.0)
-    
-    if detection_algorithm == 'ml':
-        from src.ml_detector import MLDetector
-        print(f'Detection algorithm: ML (Neural Network)')
-        detector = MLDetector(
-            window_size=config.SEG_WINDOW_SIZE,
-            threshold=0.5,  # Probability threshold
-            enable_lowpass=config.ENABLE_LOWPASS_FILTER,
-            lowpass_cutoff=config.LOWPASS_CUTOFF,
-            enable_hampel=config.ENABLE_HAMPEL_FILTER,
-            hampel_window=config.HAMPEL_WINDOW,
-            hampel_threshold=config.HAMPEL_THRESHOLD
-        )
-    else:
-        print(f'Detection algorithm: MVS (Moving Variance Segmentation)')
-        detector = MVSDetector(
-            window_size=config.SEG_WINDOW_SIZE,
-            threshold=initial_threshold if isinstance(initial_threshold, (int, float)) else 1.0,
-            enable_lowpass=config.ENABLE_LOWPASS_FILTER,
-            lowpass_cutoff=config.LOWPASS_CUTOFF,
-            enable_hampel=config.ENABLE_HAMPEL_FILTER,
-            hampel_window=config.HAMPEL_WINDOW,
-            hampel_threshold=config.HAMPEL_THRESHOLD
-        )
+    print('Detection algorithm: MVS (Moving Variance Segmentation)')
+    detector = MVSDetector(
+        window_size=config.SEG_WINDOW_SIZE,
+        threshold=initial_threshold if isinstance(initial_threshold, (int, float)) else 1.0,
+        enable_lowpass=config.ENABLE_LOWPASS_FILTER,
+        lowpass_cutoff=config.LOWPASS_CUTOFF,
+        enable_hampel=config.ENABLE_HAMPEL_FILTER,
+        hampel_window=config.HAMPEL_WINDOW,
+        hampel_threshold=config.HAMPEL_THRESHOLD
+    )
     
     # Initialize and start traffic generator (rate is static from config.py)
     gc.collect()  # Free memory before creating socket
@@ -847,15 +761,10 @@ def main():
                     last_dropped = dropped
                     
                     state_str = 'MOTION' if metrics['state'] == 1 else 'IDLE'
-                    motion_metric = metrics.get('moving_variance', metrics.get('jitter', metrics.get('probability', 0)))
+                    motion_metric = metrics['moving_variance']
                     threshold = metrics['threshold']
-                    is_ml = 'probability' in metrics
-                    # For ML, probability and threshold are both 0-1, so progress = probability
-                    if is_ml:
-                        progress = motion_metric  # probability is already 0-1
-                    else:
-                        progress = motion_metric / threshold if threshold > 0 else 0
-                    progress_bar = format_progress_bar(progress, threshold, is_probability=is_ml)
+                    progress = motion_metric / threshold if threshold > 0 else 0
+                    progress_bar = format_progress_bar(progress, threshold)
                     print(f"{progress_bar} | pkts:{publish_counter} drop:{dropped_delta} pps:{pps} | "
                           f"mvmt:{motion_metric:.4f} thr:{threshold:.4f} | {state_str}")
                     
